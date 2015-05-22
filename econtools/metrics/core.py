@@ -514,6 +514,7 @@ def f_stat(V, R, beta, r, df_d):
     return F, pF
 
 
+# SHAC
 def dist_weights(xu, x, y, kernel, band):
     N, K = xu.shape
     Wxu = np.zeros((N, K))
@@ -545,11 +546,43 @@ def dist_kernels(kernel, band):
         return tria
 
 
+# Robust weak-IV
+def mp_weakiv(df, x, z):
+    reg_df = df[force_list(x) + force_list(z)].copy()
+    reg_df[z] = orthogonalize(reg_df[z])
+    first_stage = reg(df, x, z, vce_type='robust')
+    Y = df[x]
+    Z = df[z]
+    YZ = Y.T.dot(Z)
+    n = first_stage.N
+    W = first_stage.vce
+    trW2 = np.trace(W)
+    F_eff = np.dot(YZ, YZ.T)/(trW2 * n)
+    # K_eff
+    tau = .1
+    eks = 1/tau
+    K_num = trW2**2 * (1 + 2*eks)
+    max_eval = np.max(la.eigvalsh(W))
+    K_denom = np.trace(W.T.dot(W)) + 2*eks*trW2*max_eval
+    K_eff = K_num/K_denom
+
+    return F_eff, K_eff
+
+
+def orthogonalize(X):
+    x = X.astype(float)
+    return x.dot(la.inv(sqrtm(x.T.dot(x))))
+
+
 if __name__ == '__main__':
     from os import path
     test_path = path.split(path.relpath(__file__))[0]
     data_path = path.join(test_path, 'tests', 'data')
     df = pd.read_stata(path.join(data_path, 'auto.dta'))
+    y = 'price'
+    x = ['mpg']
+    z = ['weight', 'trunk']
+    w = []
     if 0 == 1:
         y_name = 'price'
         cluster = 'gear_ratio'
@@ -557,14 +590,20 @@ if __name__ == '__main__':
         rhv = ['mpg', 'length']
         results = reg(df, y_name, rhv, cluster=cluster, a_name=cluster)
         print results.summary
-    elif 1 == 1:
-        y = 'price'
-        x = ['mpg', 'length']
-        z = ['weight', 'trunk']
-        w = []
+    elif 0 == 1:
         cluster = 'gear_ratio'
         tsls = ivreg(df, y, x, z, w, addcons=True, cluster='gear_ratio')
         print tsls.summary
         liml = ivreg(df, y, x, z, w, addcons=True, cluster='gear_ratio',
                      method='liml')
         print liml.summary
+    else:
+        out1 = ivreg(df, y, x, z, w, addcons=True)
+        f_eff, k_eff = mp_weakiv(df, 'mpg', z)
+        print out1.summary
+        print "F_eff={}; K_eff={}".format(f_eff, k_eff)
+        df[z] = orthogonalize(df[z].astype(float))
+        out2 = ivreg(df, y, x, z, w, addcons=True)
+        first = reg(df, 'mpg', z, addcons=True, vce_type='robust')
+        print "Real F={}".format(first.F)
+        print out2.summary
